@@ -998,6 +998,12 @@ NO_PROXY='*' ACCESS_PASSWORD=你的密码 node scripts/browser-check.js   # 真�
 
 Pull Request 只构建、不推送，用来提前暴露构建问题。
 
+> ⚠️ **首次推送后需要手动把包设为公开。**
+> GHCR 上的包**默认是私有的**，哪怕仓库本身是公开的 —— 别人 `docker pull` 会报
+> `denied` 或 `unauthorized`。首次构建成功后，去
+> `https://github.com/users/myedunote/packages/container/docker-wxchat/settings`
+> 把 Visibility 改成 Public 即可（只需做一次）。
+
 `scripts/selfcheck.js` 覆盖健康检查、静态资源、鉴权与登录锁定、文本/长文本、
 文件上传下载、搜索、删除单条、SSE 与长轮询、一键清空、错误处理等 88 项断言。
 其中包含一组**静态守卫**（不需要跑服务也能单独跑）：
