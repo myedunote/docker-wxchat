@@ -998,11 +998,22 @@ NO_PROXY='*' ACCESS_PASSWORD=你的密码 node scripts/browser-check.js   # 真�
 
 Pull Request 只构建、不推送，用来提前暴露构建问题。
 
-> ⚠️ **首次推送后需要手动把包设为公开。**
-> GHCR 上的包**默认是私有的**，哪怕仓库本身是公开的 —— 别人 `docker pull` 会报
-> `denied` 或 `unauthorized`。首次构建成功后，去
-> `https://github.com/users/myedunote/packages/container/docker-wxchat/settings`
+> ⚠️ **如果 `docker pull` 报 `denied` 或 `unauthorized`**，多半是包的可见性问题：
+> GHCR 上的包在部分账号设置下**默认是私有的**，哪怕仓库本身是公开的。
+> 去 `https://github.com/users/myedunote/packages/container/docker-wxchat/settings`
 > 把 Visibility 改成 Public 即可（只需做一次）。
+>
+> 本仓库当前已确认是**公开可拉取**的 —— 验证方法：不带任何凭据请求清单应返回 401
+> （GHCR 对所有镜像都要求 Bearer token，这是协议行为不是权限问题），
+> 但用匿名 token 请求应返回 200：
+> ```bash
+> tok=$(curl -s "https://ghcr.io/token?scope=repository:myedunote/docker-wxchat:pull&service=ghcr.io" \
+>       | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+> curl -sI -H "Authorization: Bearer $tok" \
+>      -H "Accept: application/vnd.oci.image.index.v1+json" \
+>      https://ghcr.io/v2/myedunote/docker-wxchat/manifests/latest | head -1
+> # 期望 HTTP/2 200
+> ```
 
 `scripts/selfcheck.js` 覆盖健康检查、静态资源、鉴权与登录锁定、文本/长文本、
 文件上传下载、搜索、删除单条、SSE 与长轮询、一键清空、错误处理等 88 项断言。
