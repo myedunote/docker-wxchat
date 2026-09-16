@@ -343,11 +343,20 @@ async function main() {
     //   ② 直链在「不带任何请求头」时仍能通过鉴权并拿到文件 ——
     //      原生下载是顶层导航，本来就没法设置 Authorization 头。
     // 真正的「点下去、文件落盘」在下面用移动端模拟验（见 [5b]）。
+    //
+    // HarmonyOS NEXT 那几条来自华为官方《User-Agent 开发指导》的默认 UA 模板：
+    //   Mozilla/5.0 ({DeviceType}; {OSName} {OSVersion}) AppleWebKit/537.36
+    //   (KHTML, like Gecko) Chrome/{ver}.0.0.0 Safari/537.36  ArkWeb/{a.b.c.d} {DeviceCompat}
+    // 注意 ArkWeb 前官方就是**两个空格**，这里照抄，别"顺手"规范成空格。
     const uaProbe = await evaluate(`(() => {
       const cases = [
         ['Android Chrome', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36', 'Linux x86_64', 0, true],
         ['iPhone Safari', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1', 'iPhone', 5, true],
         ['iPadOS Safari', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', 'MacIntel', 5, true],
+        ['HarmonyOS 手机', 'Mozilla/5.0 (Phone; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1 Mobile', 'Linux armv8l', 5, true],
+        ['HarmonyOS 平板(UA 无 Mobile)', 'Mozilla/5.0 (Tablet; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1', 'Linux armv8l', 5, true],
+        ['HarmonyOS 三方 WebView(未追加 Mobile)', 'Mozilla/5.0 (Phone; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1 WeChat/8.0.50', 'Linux armv8l', 5, true],
+        ['HarmonyOS 2in1(PC)', 'Mozilla/5.0 (PC; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1', 'Linux x86_64', 0, false],
         ['桌面 Chrome', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36', 'Win32', 0, false]
       ];
       const bad = [];
@@ -363,7 +372,7 @@ async function main() {
       delete navigator.maxTouchPoints;
       return bad.length ? 'FAIL: ' + bad.join(', ') : 'ok';
     })()`);
-    check('平台判定：Android/iPhone/iPadOS 走直链，桌面走流式',
+    check('平台判定：Android/iPhone/iPadOS/HarmonyOS 走直链，桌面走流式',
       uaProbe === 'ok', `实际 ${uaProbe}`);
 
     // ⚠ 下面两条都必须显式 `cache: 'no-store'`。

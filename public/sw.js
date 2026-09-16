@@ -11,7 +11,7 @@
  *   命名：与 package.json 的 version 对齐；同一版本内多次改资源就追加 -1 / -2。
  *   当前对应 docker-wxchat v2.0.1。
  */
-const CACHE_NAME = 'wxchat-static-2.0.1-3';
+const CACHE_NAME = 'wxchat-static-2.0.1-4';
 const PRECACHE = [
   '/',
   '/index.html',

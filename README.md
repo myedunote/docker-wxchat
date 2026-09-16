@@ -829,6 +829,28 @@ tick 内完成，也不存在手势过期的问题。
   > `Date.now() + hours*3600*1000`），不是 JWT 标准的秒。按秒比较会让**所有** token
   > 被判为已过期，移动端下载将彻底不可用。自测里有断言专门守着这条。
 
+**平台判定为什么要单独写**（`Utils.useNativeDownload()`）：
+
+「该不该走直链」这件事，光看 UA 里有没有 `Mobile` 会漏掉两类真实设备：
+
+- **iPadOS Safari** 的 UA 是 `Macintosh`（伪装成桌面），任何基于 `Mobi|Android|iPhone|iPad`
+  的判定都会把它归成桌面 → 继续走 `blob:` 那条死路。靠 `isIOS()`
+  （`navigator.platform === 'MacIntel' && maxTouchPoints > 1`）兜底。
+- **HarmonyOS NEXT / OpenHarmony**（ArkWeb 内核）的官方默认 UA 是：
+
+  ```
+  Mozilla/5.0 (Phone; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko)
+  Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1 Mobile
+  ```
+
+  它**不含 `Android`**，而结尾的 `Mobile` 来自 DeviceCompat 这个「前向兼容字段」——
+  平板和自行设置过 UA 的三方 WebView 都可能没有它。华为官方因此建议用
+  `OpenHarmony` 识别系统、用 `Phone` / `Tablet` / `PC` 识别形态。现在的判定是：
+  命中 `OpenHarmony|ArkWeb` 时，**只有 `(PC; …)` 算桌面**（2in1 设备），其余一律按移动端。
+
+  这里判错的代价是不对称的：误判成移动端只是少一个进度条，误判成桌面则**下载直接失效**，
+  所以未知形态一律倒向移动端。
+
 **关于「凭据放在 URL 里」的取舍**（这是个有意识的决定，不是疏忽）：
 
 下载直链用 `?token=` 传凭据，于是 24 小时有效的 JWT 会出现在 URL 里。
@@ -946,6 +968,13 @@ npm run diagnose:login  # 登录链路诊断（在容器内运行，见「登录
 （`API.request` 的超时逻辑），所以缺陷一路绿灯溜到线上。现在它同时断言这些事：
 裸接口能下、经 `API.request(timeout:0)` 能下、**有限超时依然会中止**、
 以及移动端直链能过鉴权（无请求头 + `?token=`）。
+
+平台判定那一条覆盖 **8 种 UA**：Android、iPhone、iPadOS（`Macintosh` 伪装）、
+HarmonyOS 手机 / 平板 / 三方 WebView / 2in1（PC）、桌面 Chrome。
+之所以列这么多，是因为这条断言曾经是「空的」——用「文件是否真的落盘」去验移动端下载，
+在桌面 Chrome 伪装成 Android UA 时**照样通过**（桌面支持 `blob:`，真机 WebView 不支持），
+真正能钉住修复的是「下载 URL 的协议不是 `blob:`」。
+**判「走的是哪条路」，而不是判「结果对不对」**，是这一组断言的立足点。
 
 最后两条是**反向对照**，少了它们，「把所有超时一律关掉」「把鉴权整个去掉」
 也能让前面的断言通过：超时那条打一个真实的慢接口（`/api/poll`）验证仍会被中止，

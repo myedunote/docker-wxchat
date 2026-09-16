@@ -23,7 +23,23 @@ const Utils = {
 
   getDeviceType() {
     const ua = navigator.userAgent || '';
+
+    // 常规移动端：Android / iOS / 通用 `Mobi` 标识
     if (/Mobi|Android|iPhone|iPad|iPod/i.test(ua)) return 'mobile';
+
+    // HarmonyOS NEXT / OpenHarmony（ArkWeb 内核）。官方默认 UA 形如：
+    //   Mozilla/5.0 (Phone; OpenHarmony 5.0) AppleWebKit/537.36 (KHTML, like Gecko)
+    //   Chrome/114.0.0.0 Safari/537.36  ArkWeb/4.1.6.1 Mobile
+    // 它**不含 `Android`**，而 `Mobile` 只来自 DeviceCompat 这个「前向兼容字段」——
+    // 平板与三方 WebView 完全可能没有它。所以上面那条正则兜不住，这是国内存量很大的机型。
+    //
+    // 官方建议：用 `OpenHarmony` 识别系统，用 DeviceType(`Phone`/`Tablet`/`PC`) 识别形态。
+    // 只有 2in1 是桌面形态，其余（含未标明形态的）一律按移动端处理 ——
+    // 判错的代价不对称：误判成移动端只少一个进度条，误判成桌面则下载直接失效。
+    if (/OpenHarmony|ArkWeb/i.test(ua)) {
+      return /\(\s*PC\s*;/i.test(ua) ? 'desktop' : 'mobile';
+    }
+
     return 'desktop';
   },
 
@@ -58,8 +74,10 @@ const Utils = {
    * 而且**发起时机就在用户点击的同一个 tick 里**，不存在手势过期问题。
    * 代价是前端拿不到进度 —— 这个代价必须付，不能假装还有进度。
    *
-   * ⚠ iPadOS Safari 的 UA 是 `Macintosh`（伪装成桌面），`getDeviceType()` 判不出来，
-   *   所以必须用 `isIOS()` 兜底；否则 iPad 会继续走 Blob 那条死路。
+   * ⚠ 两个靠 `UA` 本身判不出来的坑，都在 `getDeviceType()` 里补：
+   *   1. iPadOS Safari 的 UA 是 `Macintosh`（伪装成桌面），必须用 `isIOS()` 兜底；
+   *   2. HarmonyOS NEXT 的 UA 不含 `Android`（见 `getDeviceType()` 注释）。
+   *   漏掉任何一个，那批设备都会继续走 Blob 那条死路。
    */
   useNativeDownload() {
     return this.isMobile() || this.isIOS();
