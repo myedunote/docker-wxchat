@@ -1,5 +1,7 @@
 # docker-wxchat
 
+[![Build and publish Docker image](https://github.com/myedunote/docker-wxchat/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/myedunote/docker-wxchat/actions/workflows/docker-publish.yml)
+
 微信风格的**跨设备文件 / 消息传输助手**，自托管 Docker 发行版。
 
 以 [xiyewuqiu/wxchat](https://github.com/xiyewuqiu/wxchat) 最新 `main` 为功能基准，
@@ -9,6 +11,7 @@ Node.js + SQLite + 本地磁盘，一条命令即可在自己的服务器上跑�
 - 前端与业务逻辑**直接复用上游代码**，不另起炉灶
 - Cloudflare 专有绑定（D1 / R2 / ASSETS）在适配层等价替换，业务代码无感知
 - 数据全部落在宿主机 `./data` 与 `./uploads`，随时备份、随时迁移
+- 每次推送到 `main` 自动构建 **amd64 / arm64 双架构**镜像并发布到 GitHub Packages
 
 ---
 
@@ -50,6 +53,49 @@ curl -sf http://127.0.0.1:3000/api/health
 docker compose ps          # STATUS 应为 healthy
 docker compose logs --tail=80
 ```
+
+### 不想自己构建？直接用现成镜像
+
+每次推送到 `main`（或打 `v*` 标签）都会自动构建多架构镜像并发布到 GitHub Packages，
+**amd64 与 arm64 双架构**，Docker 会按你的机器自动挑对应的那个：
+
+```bash
+docker run -d \
+  --name wxchat \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e ACCESS_PASSWORD='你的访问密码' \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
+  -v wxchat-data:/app/data \
+  -v wxchat-uploads:/app/uploads \
+  ghcr.io/myedunote/docker-wxchat:latest
+```
+
+> 这里用**命名卷**（`wxchat-data` / `wxchat-uploads`）而不是 `./data` 绑定挂载，
+> 是为了绕开最常见的那类启动失败：绑定挂载的宿主机目录若由 Docker 以 root 创建，
+> 而容器内进程以 uid 1000 运行，就会报 `EACCES /app/data`。
+> 命名卷会继承镜像里已经 `chown` 好的属主，不会有这个问题。
+> 如果你确实需要绑定挂载（想直接看到文件），请先 `chown -R 1000:1000 ./data ./uploads`，
+> 详见「数据库 / 上传目录打不开」。
+
+生产环境建议固定版本，而不是跟着 `latest` 漂：
+
+```bash
+docker pull ghcr.io/myedunote/docker-wxchat:2.0.1
+```
+
+升级到新版本：
+
+```bash
+docker pull ghcr.io/myedunote/docker-wxchat:latest
+docker stop wxchat && docker rm wxchat
+# 用上面同样的 docker run 重新起一个（命名卷里的数据会保留）
+```
+
+> ⚠️ 仓库根目录的 `docker-compose.yml` **只做本地构建**，它不引用任何外部镜像 ——
+> 这是刻意的。历史上同时存在「根目录拉镜像」和「本地构建」两套入口，
+> 导致 `docker compose up` 跑起来的是旧镜像却以为用的是新代码。
+> 想用现成镜像，请用上面的 `docker run`，不要改 compose。
 
 ### 数据存在哪
 
@@ -931,12 +977,29 @@ cp .env.example .env          # 至少改 ACCESS_PASSWORD
 npm start                     # 等价于容器里的 node src/server.js
 
 # 另开一个终端
-ACCESS_PASSWORD=你的密码 npm run selfcheck      # 端到端 API 自检
-node scripts/browser-check.js                   # 真实浏览器 UI 冒烟测试（需本机 Chrome）
+NO_PROXY='*' ACCESS_PASSWORD=你的密码 npm run selfcheck   # 端到端 API 自检
+NO_PROXY='*' ACCESS_PASSWORD=你的密码 node scripts/browser-check.js   # 真实浏览器 UI 冒烟测试（需本机 Chrome）
 ```
 
+> `NO_PROXY='*'` 是为了绕开宿主机上可能存在的 `http_proxy` —— 访问本地服务不该走代理。
+> 注意 Node 内置的 `fetch`（undici）并不读 `http_proxy`，所以不加通常也没事；
+> 但脚本里若混用了 `curl`，代理会把请求劫持走。
+
+### 持续集成
+
+`.github/workflows/docker-publish.yml` 在每次推送到 `main` 或打 `v*` 标签时做两件事：
+
+1. **verify** —— 装依赖、跑环境变量消费审计、启动服务端跑一遍 `selfcheck.js`。
+2. **build** —— 通过后构建 `linux/amd64` + `linux/arm64` 双架构镜像，推送到
+   `ghcr.io/myedunote/docker-wxchat`。
+
+让自检作为构建的**前置门槛**是刻意的：镜像一旦推上去别人就会 `pull` 走，
+让一个自检不通过的版本占用 `latest`，比构建失败糟糕得多 —— 构建失败至少是显式的。
+
+Pull Request 只构建、不推送，用来提前暴露构建问题。
+
 `scripts/selfcheck.js` 覆盖健康检查、静态资源、鉴权与登录锁定、文本/长文本、
-文件上传下载、搜索、删除单条、SSE 与长轮询、一键清空、错误处理等 86 项断言。
+文件上传下载、搜索、删除单条、SSE 与长轮询、一键清空、错误处理等 88 项断言。
 其中包含一组**静态守卫**（不需要跑服务也能单独跑）：
 
 - **SW 缓存名必须与 `package.json` 的 version 对齐** —— 防止改了静态资源却忘记 bump 缓存名
