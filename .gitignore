@@ -1,0 +1,59 @@
+# 依赖与构建产物
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# 运行时数据（内容绝不入库，但保留空目录本身）
+#
+# 为什么保留目录：docker-compose.yml 把 ./data 与 ./uploads bind-mount 到容器内，
+# 如果宿主机的这两个目录不存在，Docker 会自动以 root:root 创建它们，
+# 而容器内进程以 node（uid 1000）运行，结果就是「上传目录不可写」启动失败。
+# 用 .gitkeep 占位，clone 下来目录就已经存在，且属主是当前用户。
+data/*
+!data/.gitkeep
+uploads/*
+!uploads/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+
+# 环境变量与密钥
+.env
+.env.local
+.env.*.local
+.dev.vars
+
+# 打包产物 —— 注意：项目压缩包里会包含 .env，绝不能提交
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# 日志
+*.log
+logs/
+
+# Cloudflare / Wrangler（上游遗留，自托管不需要）
+.wrangler/
+
+# 自检脚本的临时产物
+#   .tmp-e2e/     —— ui-check-ai-flow.mjs 的流程截图
+#   .cowork-temp/ —— 排查时留下的探针脚本与临时库
+# 两者都是本地验证残留，内容随时可再生成，不入库。
+.tmp-e2e/
+.tmp-*/
+.cowork-temp/
+
+# AI 助手的工作记忆与项目笔记（排查过程、约定沉淀）。
+# 属于本地工作产物，不是要发布的产品代码；需要共享时另行导出。
+.workbuddy-ai/

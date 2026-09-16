@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
+  <title>登录 - 文件传输助手</title>
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#ededed" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="文件传输助手安全登录">
+
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/ios/180.png">
+
+  <link rel="stylesheet" href="./css/variables.css">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/auth-page.css">
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-card">
+      <div class="auth-logo" aria-hidden="true">💬</div>
+      <h1 class="auth-title">文件传输助手</h1>
+      <p class="auth-subtitle">请输入访问密码</p>
+
+      <form class="auth-form" id="loginForm" autocomplete="on">
+        <div class="auth-field">
+          <input
+            type="password"
+            id="passwordInput"
+            class="auth-input"
+            placeholder="访问密码"
+            autocomplete="current-password"
+            required
+            enterkeyhint="go"
+            aria-label="访问密码"
+          >
+          <button type="button" class="password-toggle" id="passwordToggle" aria-label="显示密码">显示</button>
+        </div>
+        <button type="submit" class="auth-submit" id="loginButton">登 录</button>
+      </form>
+
+      <div class="auth-message error" id="errorMessage" role="alert"></div>
+      <div class="auth-message warning" id="warningMessage" role="status"></div>
+
+      <div class="auth-tips">
+        <strong>安全提示</strong>
+        <ul>
+          <li>公共设备请勿保存密码</li>
+          <li>密码在 Cloudflare 控制台可随时修改</li>
+          <li>多次失败将暂时锁定登录</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="./js/config.js"></script>
+  <script src="./js/utils.js"></script>
+  <script src="./js/auth.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // iOS vh
+      const setVh = () => {
+        document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
+      };
+      setVh();
+      window.addEventListener('resize', setVh);
+      Auth.initLoginPage();
+    });
+  </script>
+</body>
+</html>

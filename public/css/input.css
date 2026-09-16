@@ -1,0 +1,346 @@
+/* ============================================
+   底部输入栏 + 微信式内嵌面板
+   ============================================ */
+
+.input-container {
+  flex-shrink: 0;
+  position: relative;
+  z-index: var(--z-sticky);
+  background: var(--bg-input);
+  border-top: 0.5px solid var(--border-color);
+  padding-bottom: var(--safe-bottom);
+  transition: padding-bottom var(--duration-fast) var(--ease-out);
+}
+
+/* AI 模式指示 */
+.ai-mode-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px var(--space-4);
+  font-size: var(--font-size-sm);
+  color: #5b4bb7;
+  background: linear-gradient(90deg, rgba(102, 126, 234, 0.12), rgba(118, 75, 162, 0.12));
+  border-bottom: 0.5px solid var(--border-light);
+}
+.ai-mode-bar.active { display: flex; }
+.ai-mode-bar button {
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  font-size: var(--font-size-sm);
+}
+
+/* 上传进度 */
+.upload-status {
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  border-bottom: 0.5px solid var(--border-light);
+}
+.upload-status.show { display: flex; }
+.upload-progress {
+  flex: 1;
+  height: 3px;
+  background: var(--border-color);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.upload-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--wx-green);
+  transition: width 0.15s linear;
+}
+
+/* 输入行 */
+.message-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px 8px;
+  min-height: var(--input-min-height);
+}
+
+.tool-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  margin-bottom: 2px;
+}
+.tool-btn:active,
+.tool-btn.active {
+  background: var(--bg-active);
+}
+.tool-btn svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+}
+
+.input-field-wrap {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-cell);
+  border-radius: var(--radius-md);
+  border: 0.5px solid var(--border-light);
+  overflow: hidden;
+}
+
+.input-field {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  max-height: 120px;
+  padding: 8px 12px;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+.input-field::placeholder {
+  color: var(--text-tertiary);
+}
+
+.send-btn {
+  flex-shrink: 0;
+  height: 36px;
+  min-width: 60px;
+  padding: 0 14px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--wx-green);
+  color: var(--text-inverse);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none;
+  transition: opacity var(--duration-fast), transform var(--duration-fast) var(--ease-spring);
+}
+.send-btn.show {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+.send-btn:active {
+  background: var(--wx-green-press);
+}
+.send-btn:disabled {
+  opacity: 0.5;
+}
+
+.plus-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 2px;
+  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  transition: transform var(--duration-base) var(--ease-spring), background var(--duration-fast);
+}
+.plus-btn svg {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+}
+.plus-btn:active,
+.plus-btn.open {
+  background: var(--bg-active);
+}
+.plus-btn.open {
+  transform: rotate(45deg);
+}
+.plus-btn.hidden-btn {
+  display: none;
+}
+
+/* —— 内嵌面板 Dock（微信 + / 表情） —— */
+.panel-dock {
+  height: 0;
+  overflow: hidden;
+  background: var(--bg-input);
+  border-top: 0.5px solid transparent;
+  transition: height var(--duration-slow) var(--ease-out);
+  will-change: height;
+}
+.panel-dock.open {
+  height: min(46vh, 320px);
+  border-top-color: var(--border-light);
+}
+.panel-dock.open.tall {
+  height: min(52vh, 360px);
+}
+
+.emoji-panel,
+.plus-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 功能宫格 — 内嵌版 */
+.plus-panel {
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.function-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4) var(--space-2);
+}
+.function-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  position: relative;
+}
+.function-item:active .function-item-icon {
+  background: var(--bg-active);
+}
+.function-item-icon {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-cell);
+  border-radius: var(--radius-lg);
+  font-size: 28px;
+  box-shadow: var(--shadow-sm);
+  transition: background var(--duration-fast);
+}
+.function-item-title {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* 服务端未配置对应能力（如未填 AI_API_KEY）时置灰，
+   点一下会给出「去哪里补配置」的提示，而不是静默失败 */
+.function-item.is-disabled {
+  cursor: not-allowed;
+}
+.function-item.is-disabled .function-item-icon {
+  opacity: 0.45;
+  filter: grayscale(1);
+  box-shadow: none;
+}
+.function-item.is-disabled .function-item-title {
+  opacity: 0.55;
+}
+.function-item-badge {
+  margin-top: -2px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--text-tertiary);
+  color: var(--bg-page, #fff);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* 表情面板 */
+.emoji-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 0.5px solid var(--border-light);
+  flex-shrink: 0;
+}
+.emoji-tabs::-webkit-scrollbar { display: none; }
+.emoji-tab {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  background: transparent;
+}
+.emoji-tab.active {
+  color: var(--wx-green);
+  background: var(--bg-cell);
+  font-weight: var(--font-weight-medium);
+}
+.emoji-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-2) var(--space-2) var(--space-3);
+  background: var(--bg-cell);
+}
+.emoji-section-title {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  padding: 6px 4px 4px;
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+.emoji-cell {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  user-select: none;
+}
+.emoji-cell:active {
+  background: var(--bg-active);
+  transform: scale(1.12);
+}
+
+/* 拖拽遮罩 */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 193, 96, 0.12);
+  backdrop-filter: blur(2px);
+  border: 3px dashed var(--wx-green);
+}
+.drag-overlay.show { display: flex; }
+.drag-content {
+  text-align: center;
+  color: var(--wx-green);
+  font-weight: var(--font-weight-semibold);
+}
+.drag-icon { font-size: 48px; margin-bottom: var(--space-2); }
+.drag-text { font-size: var(--font-size-lg); }
+.drag-hint { margin-top: var(--space-2); font-size: var(--font-size-sm); opacity: 0.8; }
+
+/* 键盘弹起时隐藏面板 */
+body.keyboard-open .panel-dock {
+  display: none !important;
+}

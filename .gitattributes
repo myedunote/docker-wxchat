@@ -1,0 +1,27 @@
+# 统一换行符为 LF，避免 Windows 克隆后脚本/源码混入 CRLF
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# 锁定这些文件必须是 LF，否则容器内脚本可能因 CR 解析失败
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.sql text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+# 让 GitHub 语言统计正确
+*.js linguist-language=JavaScript

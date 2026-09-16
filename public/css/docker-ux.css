@@ -1,0 +1,287 @@
+/* ============================================================
+   docker-wxchat · 自托管 UX 增强样式
+   ------------------------------------------------------------
+   本文件只承载「Docker 发行版相对上游新增/修正」的样式，
+   全部复用 variables.css 里的设计令牌，不改动上游原有视觉。
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   1. 长文本完整显示，绝不截断
+   ------------------------------------------------------------
+   上游 .text-message 本身是 pre-wrap 不截断的，但这里显式兜底：
+   任何主题/媒体查询下，消息正文都不允许出现行数裁剪或高度限制，
+   避免长文本被 -webkit-line-clamp 之类规则意外切掉。
+   ------------------------------------------------------------ */
+.message .message-bubble .text-message,
+.message .message-bubble .markdown-rendered {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  -webkit-box-orient: unset;
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 气泡本身也不限制高度，长内容自然撑开 */
+.message .message-bubble {
+  max-height: none;
+  overflow: visible;
+}
+
+/* 超长单行（如无空格的长 URL / 长串）强制换行，避免撑破气泡 */
+.message .message-bubble a,
+.message .message-bubble code {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* 代码块可横向滚动，但不裁剪 */
+.message .markdown-rendered pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ------------------------------------------------------------
+   2. 消息操作：一键复制 / 删除单条
+   ------------------------------------------------------------ */
+.message-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+/* 桌面端悬停显示；移动端通过长按菜单操作，这里始终隐藏以免误触 */
+@media (hover: hover) {
+  .message:hover .message-actions,
+  .message:focus-within .message-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* 触摸设备上不常显操作按钮，保持界面干净 */
+@media (hover: none) {
+  .message-actions {
+    display: none;
+  }
+}
+
+.message-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.message-action-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.message-action-btn:hover {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.message-action-btn.danger:hover {
+  background: rgba(250, 81, 81, 0.12);
+  color: var(--wx-red);
+}
+
+/* 消息删除时的收起动画 */
+.message.removing {
+  animation: message-remove var(--duration-base) var(--ease-out) forwards;
+}
+
+@keyframes message-remove {
+  to {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.98);
+    margin-top: -6px;
+  }
+}
+
+/* 右键/长按菜单中的危险项 */
+.context-menu-item.danger {
+  color: var(--wx-red);
+}
+
+/* ------------------------------------------------------------
+   3. 新消息浮标
+   ------------------------------------------------------------
+   用户上翻历史时，新消息不再强行把他拽回底部，
+   而是累计成这个浮标，点击才回到底部。
+   ------------------------------------------------------------ */
+.new-messages-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%) translateY(8px);
+  z-index: var(--z-sticky);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--wx-green);
+  color: var(--text-inverse);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-spring);
+}
+
+.new-messages-badge.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.new-messages-badge .new-messages-count {
+  font-weight: var(--font-weight-semibold);
+}
+
+.new-messages-badge:active {
+  transform: translateX(-50%) scale(0.96);
+}
+
+/* ------------------------------------------------------------
+   4. 滑动确认（清空数据用）
+   ------------------------------------------------------------ */
+.dialog-title.danger {
+  color: var(--wx-red);
+}
+
+.slide-track {
+  position: relative;
+  margin-top: var(--space-4);
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  user-select: none;
+  touch-action: none; /* 关键：阻止滑动时页面跟着滚动 */
+  cursor: grab;
+}
+
+.slide-track:focus-visible {
+  outline: 2px solid var(--wx-green);
+  outline-offset: 2px;
+}
+
+.slide-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: linear-gradient(90deg,
+    rgba(250, 81, 81, 0.22),
+    rgba(250, 81, 81, 0.42));
+  transition: width 60ms linear;
+  pointer-events: none;
+}
+
+.slide-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 34px;
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  pointer-events: none;
+  transition: opacity 80ms linear;
+}
+
+.slide-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--wx-red);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  will-change: transform;
+}
+
+.slide-knob svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.slide-knob.dragging {
+  cursor: grabbing;
+}
+
+.slide-hint {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* 暗色下让轨道更清晰 */
+@media (prefers-color-scheme: dark) {
+  .slide-track {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* ------------------------------------------------------------
+   5. 传输速度显示
+   ------------------------------------------------------------ */
+.upload-speed {
+  font-size: var(--font-size-xs);
+  color: var(--wx-green);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------
+   6. 连接状态：重连中 / 离线
+   ------------------------------------------------------------ */
+.connection-bar.reconnecting {
+  background: var(--wx-orange);
+}
+
+/* ------------------------------------------------------------
+   7. 无障碍：尊重系统「减少动态效果」
+   ------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  .new-messages-badge,
+  .slide-fill,
+  .slide-label,
+  .message-actions,
+  .slide-knob {
+    transition: none !important;
+  }
+  .message.removing {
+    animation-duration: 1ms;
+  }
+}

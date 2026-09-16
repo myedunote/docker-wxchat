@@ -1,0 +1,38 @@
+{
+  "name": "docker-wxchat",
+  "version": "2.0.1",
+  "description": "微信文件传输助手 · 自托管 Docker 发行版（上游 xiyewuqiu/wxchat 的 Node + SQLite 适配）",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "selfcheck": "node scripts/selfcheck.js",
+    "audit:env": "node scripts/audit-env-usage.mjs",
+    "check:env": "node scripts/check-env-file.mjs",
+    "diagnose:login": "node scripts/diagnose-login.mjs",
+    "mock:ai": "node scripts/mock-openai.js 18090",
+    "test:ai": "node scripts/e2e-ai-test.mjs",
+    "test:ui": "node scripts/ui-check-ai-flow.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "better-sqlite3": "^11.10.0",
+    "hono": "^4.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "wxchat",
+    "docker",
+    "self-hosted",
+    "hono",
+    "sqlite",
+    "wechat",
+    "file-transfer",
+    "pwa"
+  ],
+  "license": "CC-BY-NC-SA-4.0"
+}

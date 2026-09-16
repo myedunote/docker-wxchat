@@ -1,0 +1,53 @@
+# ============================================================
+# 构建上下文排除清单
+# 目的：让镜像里永远不含运行时数据、密钥与本地依赖，
+#       既减小体积，也避免把用户聊天记录打进镜像层。
+# ============================================================
+
+# 依赖（镜像内用 npm ci 重新装）
+node_modules
+**/node_modules
+
+# 运行时数据 —— 必须排除，它们通过 volume 挂载进来
+data
+uploads
+*.db
+*.db-shm
+*.db-wal
+
+# 密钥
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# 版本控制与文档
+.git
+.gitignore
+.github
+
+# 编辑器 / 系统
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs
+
+# 本地验证残留（截图、探针脚本、临时库）
+# 它们不进镜像，也没必要每次构建都塞进 build context
+.tmp-e2e
+.tmp-*
+.cowork-temp
+.workbuddy-ai
+
+# Cloudflare 遗留
+.wrangler
+
+# Docker 自身
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml

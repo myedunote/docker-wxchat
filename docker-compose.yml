@@ -1,0 +1,58 @@
+# ============================================================
+# docker-wxchat —— 仓库根目录唯一的 compose 文件
+# ------------------------------------------------------------
+# 刻意不再提供第二套「拉取外部预构建镜像」的入口。
+# 历史问题正是：根目录 compose 用 yilan666/wxchat:latest，
+# 而 docker/Dockerfile 是本地构建的另一套启动路径，两者镜像内容不一致，
+# 用户跑到坏镜像就出现 Cannot find module '/server.js'。
+# 现在只有一条路径：本地构建，源码即镜像。
+# ============================================================
+
+services:
+  wxchat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wxchat:09154
+    container_name: wxchat
+    restart: unless-stopped
+
+    # 宿主机端口 : 容器端口。容器内固定 3000，宿主机端口可用 .env 的 PORT 改
+    ports:
+      - "${PORT:-3000}:3000"
+
+    env_file:
+      - .env
+
+    environment:
+      # 容器内部端口恒定 3000，与上面的端口映射容器侧、以及 healthcheck 保持一致。
+      # 这样即便 .env 里把 PORT 改成 8080，也只是换宿主机端口，不会把容器监听端口改坏。
+      PORT: 3000
+      # 时区：默认 Asia/Shanghai，可在 .env 覆盖
+      TZ: ${TZ:-Asia/Shanghai}
+
+    volumes:
+      # SQLite 数据库文件与上传文件都持久化到宿主机
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+
+    # 以指定 uid/gid 运行（默认 1000，即镜像里的 node 用户）。
+    # Linux 上如果宿主机 ./data、./uploads 属于别的用户，
+    # 把 .env 里的 PUID/PGID 改成对应值即可，无需改 Dockerfile。
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    healthcheck:
+      # 打真实存活接口，而不是可能 404 的 /login.html。
+      # 用 node 内置 fetch：node 一定存在，不依赖镜像里有没有 wget/curl。
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    # 让 SQLite 的 WAL 在容器停止时能正常落盘
+    stop_grace_period: 15s
