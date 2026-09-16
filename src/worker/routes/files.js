@@ -96,7 +96,21 @@ files.get('/download/:r2Key{.+}', async (c) => {
     const headers = {
       'Content-Type': fileInfo.mime_type || 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName)}`,
-      'Cache-Control': 'private, max-age=3600'
+      'Cache-Control': 'private, max-age=3600',
+      // 下载直链要带 `?token=`（浏览器原生下载是顶层导航，没法设 Authorization 头），
+      // 于是**凭据出现在 URL 里**。URL 会流窜到浏览器历史、反向代理的 access log，
+      // 以及（若响应被渲染而非下载时）跨站请求的 Referer。
+      // no-referrer 把最后一条堵死：不让本响应里的 token 通过 Referer 泄给第三方。
+      //
+      // 注意另外两条堵不住，属于「用 query 传凭据」的固有代价：
+      //   - nginx/Caddy 的 access log 里会有完整 URL（应用自身不记 URL，但代理会）
+      //   - 浏览器历史里会留一条 24 小时有效的链接
+      // 想彻底避免，需要改成 Cookie 或短时效的一次性下载票据 —— 那是设计变更，
+      // 当前版本权衡后接受这个代价（EventSource 早就用 `?token=` 了，并非新引入）。
+      'Referrer-Policy': 'no-referrer',
+      // 用户可上传任意类型文件。虽然 attachment 已经让它不会被就地渲染，
+      // 仍加上 nosniff 作为纵深防御，避免 MIME 嗅探把上传内容当脚本执行。
+      'X-Content-Type-Options': 'nosniff'
     }
 
     // file_size 可能为 0 或缺失，空值不能作为 Content-Length 下发

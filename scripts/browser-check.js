@@ -338,11 +338,11 @@ async function main() {
     //      transient activation 窗口（约 5s）早已过期，会被当「自动下载」拦掉。
     // 所以移动端改走「带 token 的直链」，交给浏览器原生下载器。
     //
-    // 本机只有桌面 Chrome，无法真的跑一个手机浏览器，所以这里验的是
-    // **这条链路成立所依赖的两个前提**，而不是它的表象：
+    // 这里先验**这条链路成立所依赖的两个前提**，而不是它的表象：
     //   ① 平台判定正确（桌面不能被误判，iPadOS 的 Macintosh UA 不能漏）；
     //   ② 直链在「不带任何请求头」时仍能通过鉴权并拿到文件 ——
     //      原生下载是顶层导航，本来就没法设置 Authorization 头。
+    // 真正的「点下去、文件落盘」在下面用移动端模拟验（见 [5b]）。
     const uaProbe = await evaluate(`(() => {
       const cases = [
         ['Android Chrome', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36', 'Linux x86_64', 0, true],
@@ -376,20 +376,28 @@ async function main() {
     const dlDirect = await evaluate(`(async () => {
       const j = await (await fetch('/api/messages?limit=5000', { headers: Auth.addAuthHeader({}) })).json();
       const f = (j.data || []).find(m => m.type === 'file' && m.original_name === '浏览器验证.txt');
-      if (!f) return 'no-file';
+      if (!f) return { err: 'no-file' };
       const url = API.getDownloadUrl(f.r2_key);
-      if (url.indexOf('?token=') < 0) return 'no-token:' + url;
+      if (url.indexOf('?token=') < 0) return { err: 'no-token' };
       const r = await fetch(url, { cache: 'no-store' });   // 刻意不带任何请求头，模拟原生下载
-      const cd = r.headers.get('content-disposition') || '';
-      if (r.status !== 200) return 'status:' + r.status;
-      const body = await r.text();
-      if (body !== '浏览器上传验证内容') return 'body:' + body;
-      if (cd.indexOf('attachment') < 0) return 'no-attachment:' + cd;
-      if (cd.indexOf("filename*=UTF-8''") < 0) return 'no-utf8-name:' + cd;
-      return 'ok';
+      return {
+        status: r.status,
+        body: await r.text(),
+        cd: r.headers.get('content-disposition') || '',
+        rp: r.headers.get('referrer-policy') || '',
+        nosniff: r.headers.get('x-content-type-options') || ''
+      };
     })()`);
     check('移动端直链：无请求头 + ?token= 可下载，且带 attachment 与中文名',
-      dlDirect === 'ok', `实际 ${dlDirect}`);
+      dlDirect.status === 200
+      && dlDirect.body === '浏览器上传验证内容'
+      && dlDirect.cd.includes('attachment')
+      && dlDirect.cd.includes("filename*=UTF-8''"),
+      `实际 ${JSON.stringify({ status: dlDirect.status, err: dlDirect.err, cd: dlDirect.cd })}`);
+    // 直链把凭据（24 小时有效的 JWT）放在 URL 里，就不能让它经 Referer 泄给第三方
+    check('下载响应带 no-referrer + nosniff',
+      dlDirect.rp === 'no-referrer' && dlDirect.nosniff === 'nosniff',
+      `referrer-policy=${JSON.stringify(dlDirect.rp)} nosniff=${JSON.stringify(dlDirect.nosniff)}`);
 
     // 反向对照：去掉 token 必须 401。
     // 少了这条，「鉴权整个失效」也能让上面那条通过。

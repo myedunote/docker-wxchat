@@ -829,6 +829,22 @@ tick 内完成，也不存在手势过期的问题。
   > `Date.now() + hours*3600*1000`），不是 JWT 标准的秒。按秒比较会让**所有** token
   > 被判为已过期，移动端下载将彻底不可用。自测里有断言专门守着这条。
 
+**关于「凭据放在 URL 里」的取舍**（这是个有意识的决定，不是疏忽）：
+
+下载直链用 `?token=` 传凭据，于是 24 小时有效的 JWT 会出现在 URL 里。
+下载响应已加 `Referrer-Policy: no-referrer`，堵住「token 经 Referer 泄给第三方」这条路；
+另加 `X-Content-Type-Options: nosniff`，对用户上传的任意类型文件做纵深防御。
+
+但**另外两条堵不住**，属于这个方案的固有代价：
+
+- 反向代理（nginx / Caddy）的 access log 里会有完整 URL —— 应用自身不记录 URL，
+  但代理会记。若你在意，应在代理层对 `/api/files/download/` 做日志脱敏。
+- 浏览器历史里会留一条 24 小时有效的链接。
+
+想彻底避免，需要改成 Cookie 鉴权或短时效的一次性下载票据 —— 那是设计变更，
+当前版本权衡后接受。注意这并非本次新引入：`realtime.js` 的 EventSource
+（SSE 无法设置请求头）早就在用 `?token=`。
+
 桌面端行为完全不变：仍然走流式读取 + 进度条 + 实时速度。
 
 > 自测脚本 `node scripts/browser-check.js` 里有 9 条断言守着这条链路，其中最关键的是
@@ -921,7 +937,7 @@ npm run diagnose:login  # 登录链路诊断（在容器内运行，见「登录
 `check:env` 来自另一类真实事故：`ACCESS_PASSWORD` 里的 `$` 被 compose 插值吃掉，
 用户输入自己设的密码却一直提示「密码错误」，而日志里看不出任何异常。
 
-`scripts/browser-check.js` 通过原生 CDP 驱动本机 Chrome，共 50 项断言，验证登录、发消息、
+`scripts/browser-check.js` 通过原生 CDP 驱动本机 Chrome，共 51 项断言，验证登录、发消息、
 长文本不截断、文件上传、**文件下载（走 `API.downloadFile` 真实入口）**、**移动端下载
 （真机行为模拟）**、**过期 token 不顶掉应用页面**、复制、删除、滑动确认清空、
 连接状态文案，并收集控制台报错与未捕获异常。
