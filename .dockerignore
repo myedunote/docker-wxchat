@@ -43,6 +43,9 @@ logs
 .cowork-temp
 .workbuddy-ai
 
+# git filter-branch 的工作目录：含一份完整树快照，绝不能进 build context
+.git-rewrite
+
 # Cloudflare 遗留
 .wrangler
 

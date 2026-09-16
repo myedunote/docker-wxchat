@@ -13,7 +13,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: wxchat:09154
+    image: wxchat:local
+    # ⚠ 必须显式写 pull_policy: build。
+    #   compose 的缺省规则是「先尝试 pull 同名镜像，拉不到才 build」，
+    #   不写这一行，`docker compose up`（不带 --build）就可能跑起本地旧镜像
+    #   或远端同名镜像，而不是刚改过的 Dockerfile ——
+    #   症状是「我明明修好了，它还是报旧错」。
+    pull_policy: build
     container_name: wxchat
     restart: unless-stopped
 
@@ -32,12 +38,17 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
 
     volumes:
-      # SQLite 数据库文件与上传文件都持久化到宿主机
-      - ./data:/app/data
-      - ./uploads:/app/uploads
+      # SQLite 数据库文件与上传文件都持久化到宿主机。
+      #
+      # 默认是**相对路径**（仓库目录下的 ./data 与 ./uploads）—— 任何人 clone
+      # 下来都能直接 up，不需要先去创建某个固定的绝对路径。
+      # 想放到别处（例如 /srv/wxchat/data），在 .env 里设 DATA_DIR / UPLOAD_DIR 即可，
+      # **不要直接改这个文件**：改了会和后续 git pull 冲突。
+      - "${DATA_DIR:-./data}:/app/data"
+      - "${UPLOAD_DIR:-./uploads}:/app/uploads"
 
     # 以指定 uid/gid 运行（默认 1000，即镜像里的 node 用户）。
-    # Linux 上如果宿主机 ./data、./uploads 属于别的用户，
+    # Linux 上如果宿主机 data、uploads 目录属于别的用户，
     # 把 .env 里的 PUID/PGID 改成对应值即可，无需改 Dockerfile。
     user: "${PUID:-1000}:${PGID:-1000}"
 

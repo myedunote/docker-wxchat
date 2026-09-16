@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** 由 docker-compose / 容器运行时消费，不由 JS 读取 */
-const CONSUMED_BY_INFRA = new Set(['PUID', 'PGID']);
+const CONSUMED_BY_INFRA = new Set(['PUID', 'PGID', 'DATA_DIR', 'UPLOAD_DIR']);
 
 /** 已在文档中标注为「预留、当前版本未强制」的变量 */
 const KNOWN_RESERVED = new Set(['AI_RATE_LIMIT', 'IMAGE_RATE_LIMIT']);
