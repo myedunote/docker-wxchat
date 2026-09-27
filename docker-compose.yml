@@ -67,3 +67,22 @@ services:
 
     # 让 SQLite 的 WAL 在容器停止时能正常落盘
     stop_grace_period: 15s
+
+    # 日志轮转。
+    #
+    # ⚠ 这一项不是「可选的优化」。Docker 默认的 json-file 驱动**没有任何上限**：
+    #   容器里 stdout 写了多少，/var/lib/docker/containers/<id>/*.log 就长多少，
+    #   永远不会自己清理。长期运行（尤其是开着一堆 SSE 长连接、或反复重启）后，
+    #   日志可以把整个分区撑满。
+    #
+    #   磁盘写满的后果**不局限于本容器**：Docker daemon 自身写不了状态、
+    #   同宿主机上其它容器一起报错甚至停止 —— 症状和「容器莫名停止」高度重合，
+    #   而且因为日志本身写不进去了，事后往往什么都查不到。
+    #   所以默认就给一个够用的上限（10 MiB × 3 个文件），而不是留空。
+    #
+    #   想调整就在 .env 里改 LOG_MAX_SIZE / LOG_MAX_FILE，不要改这个文件。
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE:-10m}"
+        max-file: "${LOG_MAX_FILE:-3}"
