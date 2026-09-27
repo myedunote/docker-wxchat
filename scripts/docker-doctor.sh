@@ -21,6 +21,8 @@ hr() { printf '%s\n' "----------------------------------------------------------
 title() { echo; echo "== $1 =="; }
 
 VERDICT=()
+EXT_IMAGE=0   # compose 是否走「外部预构建镜像」路径（1=是；默认按本地构建处理）
+IMG_REF=""
 
 # ---------------------------------------------------------------
 title "0. 环境"
@@ -72,9 +74,25 @@ elif docker compose config >/tmp/.wxchat-cfg 2>/tmp/.wxchat-cfg-err; then
   else
     echo "  → 没有 working_dir，运行时 cwd 完全取决于镜像元数据"
   fi
+  # 这份 compose 走的是哪条路径：本地构建，还是外部预构建镜像？
+  # 两类部署的告警与处置完全不同，先分流，后面的措辞都依赖这个判断。
+  IMG_REF=$(grep -E '^[[:space:]]*image:' /tmp/.wxchat-cfg | head -1 | sed 's/.*image:[[:space:]]*//; s/"//g' || true)
+  if [ -n "$IMG_REF" ] && ! grep -qE '^\s*build:' /tmp/.wxchat-cfg && printf '%s' "$IMG_REF" | grep -q '/'; then
+    EXT_IMAGE=1
+    echo "  → 检测到**外部预构建镜像**路径（image: $IMG_REF，compose 没有 build 段）"
+    echo "    本仓库约定 compose 只做本地构建（源码即镜像）；用现成镜像应走 README"
+    echo "    「不想自己构建？」一节的 docker run 方式。这份 compose 多半是手写或面板生成的。"
+    VERDICT+=("compose 走外部镜像路径（$IMG_REF，无 build 段），与仓库「compose 只做本地构建」的约定不符")
+  fi
   if ! grep -qE 'pull_policy:' /tmp/.wxchat-cfg; then
-    echo "  ⚠ 没有 pull_policy：docker compose up 可能先 pull 同名镜像，而不是构建你的源码"
-    VERDICT+=("缺少 pull_policy: build，存在跑错镜像的风险")
+    if [ "$EXT_IMAGE" -eq 1 ]; then
+      echo "  ⚠ 镜像未固定版本（当前引用：$IMG_REF）。用 :latest 会随上游发布漂移，"
+      echo "    生产环境建议固定到具体版本号（如 :2.0.1），或在 compose 里加 pull_policy"
+      VERDICT+=("外部镜像未固定版本（$IMG_REF）：建议锁定具体版本号，避免 latest 漂移")
+    else
+      echo "  ⚠ 没有 pull_policy：docker compose up 可能先 pull 同名镜像，而不是构建你的源码"
+      VERDICT+=("缺少 pull_policy: build，存在跑错镜像的风险")
+    fi
   else
     echo "  ✓ 已设置 pull_policy"
   fi
@@ -228,9 +246,19 @@ else
   done
   echo
   echo "  推荐处置："
-  echo "    docker compose down --rmi local --volumes"
-  echo "    docker compose up -d --build"
-  echo "    docker compose exec $SERVICE node -e \"console.log(process.cwd())\"   # 应为 /app"
+  if [ "$EXT_IMAGE" -eq 1 ]; then
+    echo "  你当前是「外部镜像」部署，与仓库单路径约定不一致，二选一："
+    echo "    A. 归一到仓库路径（推荐，源码即镜像）："
+    echo "         git pull && docker compose up -d --build"
+    echo "       （目录不是 git 克隆就重新克隆，把 .env、data/、uploads/ 移过去；"
+    echo "         数据目录两边一致，切换不丢数据）"
+    echo "    B. 继续用现成镜像：把 :latest 固定为具体版本（如 :2.0.1），"
+    echo "       并在 compose 里补 logging 轮转（10m × 3）与 stop_grace_period: 15s"
+  else
+    echo "    docker compose down --rmi local --volumes"
+    echo "    docker compose up -d --build"
+    echo "    docker compose exec $SERVICE node -e \"console.log(process.cwd())\"   # 应为 /app"
+  fi
 fi
 hr
 echo "提示：若第 2 节显示 command/working_dir 被覆盖，请检查 docker-compose.override.yml"
