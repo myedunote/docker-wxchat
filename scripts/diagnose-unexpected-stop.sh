@@ -182,6 +182,9 @@ else
   if [ -z "$EV" ]; then
     echo "  （该时间窗内没有事件。daemon 重启会清空事件缓冲，这本身就是线索。）"
     echo "  换个更长的窗口再试：SINCE='7d' bash $0"
+    echo "  ⚠ 事件缓冲是内存态：daemon 若重启过，事发瞬间的记录就没了。"
+    echo "    治本办法是装常驻留痕（下次事发必有记录）："
+    echo "      sudo bash scripts/watch-docker-events.sh install"
   else
     echo "$EV" | sed 's/^/  /'
     echo
@@ -531,6 +534,10 @@ if [ ${#VERDICT[@]} -eq 0 ]; then
   echo "  请把上面的完整输出，连同下面两条命令的结果一起留存："
   echo "    docker inspect $CONTAINER --format '{{.State}}'"
   echo "    journalctl -u docker --since '7d' --no-pager | tail -200"
+  echo
+  echo "  ⚠ 没找到原因 ≠ 没有原因：多数证据（events、daemon 日志）会随 daemon 重启蒸发。"
+  echo "    现在就装常驻留痕，下次事发必有「谁、几点、怎么停」的记录："
+  echo "      sudo bash scripts/watch-docker-events.sh install"
 else
   i=1
   for v in "${VERDICT[@]}"; do

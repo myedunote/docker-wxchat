@@ -306,6 +306,7 @@ GET    /api/config                     新增
 | 启动即暴露资源上限 | 启动横幅打印**容器内存上限**（自动识别 cgroup v1/v2）与 **Node 堆上限**，两者逼近时给出 OOM 风险告警；OOM 是 `SIGKILL`、不留日志，这一行是唯一的线索 |
 | 日志轮转 | compose 默认 `json-file` + `max-size=10m` × `max-file=3`，避免日志无限增长撑满磁盘、连带拖垮同机器上的其它容器 |
 | 停止原因可诊断 | `scripts/diagnose-unexpected-stop.sh` 一条命令查清「谁停的容器」：退出码 / `OOMKilled` / `docker events` / daemon 与宿主机重启 / 磁盘 / 定时任务与面板工具 |
+| 停止原因可留痕 | `scripts/watch-docker-events.sh` 把 docker events 常驻落盘（systemd 自启）：daemon 重启也只留标记不丢历史，事发后直接翻日志看「谁、几点、怎么停的」 |
 | 幂等 schema | 每次启动执行 `schema.sql`（全部 `CREATE ... IF NOT EXISTS`），可反复重启 |
 
 ---
@@ -496,6 +497,33 @@ bash scripts/diagnose-unexpected-stop.sh
 ```bash
 SINCE='7d' bash scripts/diagnose-unexpected-stop.sh
 ```
+
+**先把「黑匣子」装上：docker events 常驻留痕（强烈推荐）**
+
+`docker events` 的缓冲是 daemon 的**内存态** —— daemon 一重启，缓冲就被清空，
+事后回溯可能什么都查不到。而「daemon 重启」恰恰是上表的第一嫌疑。
+所以别赌下一次能留下证据，直接装常驻留痕：把**所有容器**（不只 wxchat）的
+启动 / 停止 / 强杀 / OOM / 删除事件连同时间戳持续落盘。daemon 重启也只会在
+日志里留一行「断开 / 重连」标记，历史不丢：
+
+```bash
+sudo bash scripts/watch-docker-events.sh install   # 装成 systemd 服务，开机自启
+tail -f /var/log/docker-events-journal.log         # 实时查看
+# 事发后回看「谁、几点、怎么停的」：
+grep -E '\| (die|stop|kill|oom) ' /var/log/docker-events-journal.log | tail -50
+# 查清根因后卸载（日志文件保留）：
+sudo bash scripts/watch-docker-events.sh uninstall
+```
+
+读日志的三个要点：
+
+- 事件行时间戳是 epoch 秒（`date -d @1730000000` 换算）；`exit=` 退出码：
+  143 = 收到 SIGTERM 后正常退出（外部主动停止），137 = 被 SIGKILL（强杀 / OOM，对照 `oom` 事件）。
+- 出现 `kill`/`stop` = 有「人」显式停它：可能是 `docker stop` / `compose down`，
+  也可能是 daemon 关机前的清理。**对照 `[journal]` 断开标记**：stop 与断开落在同一秒 →
+  是 daemon 重启干的；stop 之后断开标记迟迟不出现 → 是人 / 面板 / 定时任务执行的停止。
+- 什么事件都没有、只有一条「事件流断开」→ daemon 被硬杀（OOM / `kill -9` / 宿主机断电），
+  事件随内存缓冲一起没了 —— **断开标记的时间就是案发时间**。
 
 **不想跑脚本，就手敲这几条**（在宿主机上执行）：
 
@@ -1129,6 +1157,7 @@ tick 内完成，也不存在手势过期的问题。
 │   ├── lib/compose-env.js     # Compose env 文件解析器（含官方示例断言）
 │   ├── docker-doctor.sh       # 容器启动故障诊断（在宿主机上跑）
 │   ├── diagnose-unexpected-stop.sh  # 「容器莫名停止」诊断：查清是谁发的停止信号
+│   ├── watch-docker-events.sh       # docker events 常驻留痕（systemd 自启）：daemon 重启也不丢证据
 │   └── fix-permissions.sh     # 修正 ./data、./uploads 属主（在宿主机上跑）
 ├── data/                      # 运行时生成，不进镜像、不进 git
 └── uploads/                   # 运行时生成，不进镜像、不进 git
