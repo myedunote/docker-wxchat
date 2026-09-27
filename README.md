@@ -132,6 +132,15 @@ tar czf wxchat-backup-$(date +%F).tar.gz data uploads
 | `DATABASE_PATH` | `/app/data/wxchat.db` | SQLite 文件路径 |
 | `UPLOAD_PATH` | `/app/uploads` | 上传文件存储目录 |
 | `PUID` / `PGID` | `1000` / `1000` | 容器内进程 uid/gid，用于匹配宿主机目录属主 |
+| `LOG_MAX_SIZE` | `10m` | 容器日志单文件上限，支持 `k`/`m`/`g` 后缀 |
+| `LOG_MAX_FILE` | `3` | 容器日志最多保留几个轮转文件 |
+
+> **`LOG_MAX_*` 不是可选项。** Docker 默认的 `json-file` 日志驱动**没有上限**：
+> 容器往 stdout 写多少，`/var/lib/docker/containers/<id>/*.log` 就长多少，永不清理。
+> 磁盘被撑满的后果不局限于本容器 —— daemon 写不了状态、**同一台机器上的其它容器
+> 会跟着一起出问题**，症状与「容器莫名停止」高度重合，而且事后日志本身也写不进去，
+> 什么都查不到。所以 compose 里默认已开启「10 MiB × 3」的轮转。
+> 详见 [容器启动后不久就停止，而且别的容器也一起停](#容器启动后不久就停止而且别的容器也一起停)。
 
 ### 安全
 
@@ -293,7 +302,10 @@ GET    /api/config                     新增
 | 可配置加载条数 | `MESSAGE_LOAD_DEFAULT` 默认 5000（上游写死 50），上限 `MESSAGE_LOAD_MAX` |
 | 轮询降为降级 | SSE 是主通道；自动刷新 5s，长轮询重试间隔 5s（上游为 1s/3s） |
 | 非 root 运行 | 容器内以 `node`（uid 1000）运行，uid/gid 可通过 `PUID`/`PGID` 调整 |
-| 优雅关闭 | 收到 `SIGTERM` 时停止接收新请求、等待后台任务、WAL 落盘后关闭数据库 |
+| 优雅关闭 | 收到 `SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT` 时停止接收新请求、等待后台任务、WAL 落盘后关闭数据库；日志会记录**本次运行时长**，便于区分「刚启动就停」与「跑很久才停」 |
+| 启动即暴露资源上限 | 启动横幅打印**容器内存上限**（自动识别 cgroup v1/v2）与 **Node 堆上限**，两者逼近时给出 OOM 风险告警；OOM 是 `SIGKILL`、不留日志，这一行是唯一的线索 |
+| 日志轮转 | compose 默认 `json-file` + `max-size=10m` × `max-file=3`，避免日志无限增长撑满磁盘、连带拖垮同机器上的其它容器 |
+| 停止原因可诊断 | `scripts/diagnose-unexpected-stop.sh` 一条命令查清「谁停的容器」：退出码 / `OOMKilled` / `docker events` / daemon 与宿主机重启 / 磁盘 / 定时任务与面板工具 |
 | 幂等 schema | 每次启动执行 `schema.sql`（全部 `CREATE ... IF NOT EXISTS`），可反复重启 |
 
 ---
@@ -418,6 +430,104 @@ docker compose logs | grep -i "cannot find module" && echo "仍然有问题" || 
 ---
 
 ## 常见问题
+
+### 容器启动后不久就停止，而且别的容器也一起停
+
+先说结论：**这几乎不是应用的问题，是宿主机层面的问题。**
+
+判断依据有两条，都很硬：
+
+**第一条：日志末尾是 `收到 SIGTERM`。**
+
+```
+[wxchat] ✓ 服务已启动，listening on http://0.0.0.0:3000
+[wxchat]   健康检查: http://127.0.0.1:3000/api/health
+[wxchat]   登录页面: http://127.0.0.1:3000/login.html
+[wxchat] 收到 SIGTERM，开始优雅关闭…（本次已运行 12 秒）
+[wxchat] ✓ 数据库已安全关闭
+[wxchat] ✓ 已退出
+```
+
+`SIGTERM` 是**别人发过来的信号**，不是程序自己崩的。而且后面三步
+（停止接收请求 → 关闭数据库 → 退出）完整走完了，说明进程健康、代码没问题 ——
+真要是代码崩了，你会看到 `uncaughtException` 的堆栈，或者干脆什么都没有（被 `SIGKILL`）。
+
+**第二条：其它容器也一起停。**
+
+一个容器自己的问题，不会殃及别的容器。能一次性停掉一批容器的，只有下面几种可能：
+
+| 可能原因 | 特征 |
+| --- | --- |
+| **docker daemon 重启** | 默认配置下 daemon 重启会向**所有**容器发 `SIGTERM`。常见触发：`apt upgrade` 升级 docker、daemon 崩溃后被 systemd 拉起、手动 `systemctl restart docker` |
+| **宿主机重启 / 关机** | 关机流程会给所有进程发 `SIGTERM`。云服务器还会因欠费、到期、流量跑超、Spot 实例回收而直接关机 |
+| **有人或某个面板执行了批量停止** | `docker compose down`、`docker stop $(docker ps -q)`；NAS 面板 / 1Panel / 宝塔 / Portainer 的「重新部署」定时任务 |
+| **磁盘写满** | `/var/lib/docker` 所在分区满了以后，daemon 无法写状态，整机容器一起出问题 |
+| **整机内存耗尽** | 内核 OOM killer 挑进程杀，可能一次杀好几个。注意这种情况下**日志里不会有任何痕迹** |
+| **自动更新工具** | watchtower、Portainer 的 auto-update 之类会主动停容器再拉起 |
+
+**一条命令定位：**
+
+```bash
+bash scripts/diagnose-unexpected-stop.sh
+```
+
+它会依次查：容器的退出码与 `OOMKilled` 标志、`docker events` 里的 `stop`/`kill`/`oom`
+事件（以及**同一时刻还有哪些容器一起死了**）、内核 OOM 记录、daemon 与宿主机的重启历史、
+磁盘与日志占用、同 compose 项目的其它容器、定时任务与面板类工具，最后给出结论列表。
+想扩大时间窗就加 `SINCE`：
+
+```bash
+SINCE='7d' bash scripts/diagnose-unexpected-stop.sh
+```
+
+**不想跑脚本，就手敲这几条**（在宿主机上执行）：
+
+```bash
+# 1) 是正常停止还是被强杀？143 = SIGTERM（外部正常停止），137 = SIGKILL（强杀/OOM）
+docker inspect wxchat --format '{{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} 重启={{.RestartCount}}'
+
+# 2) 谁在什么时候动了它？以及同一时刻还有谁一起死
+docker events --since 24h --until 0s --filter 'event=die' --filter 'event=oom' \
+  --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}}'
+
+# 3) daemon 有没有重启过
+journalctl -u docker --since 24h --no-pager | grep -iE 'Stopping Docker|Started Docker'
+
+# 4) 宿主机有没有重启过（uptime 小于一天就是重启过）
+uptime; last -x reboot | head -3
+
+# 5) 磁盘有没有满
+df -h /; du -sh /var/lib/docker/containers/*/*.log | sort -rh | head
+```
+
+**处置建议：**
+
+- **如果是 daemon 重启**：这是最常见也最容易被忽略的一种。可在 `/etc/docker/daemon.json`
+  里开启 `live-restore`，让 daemon 重启时容器继续运行（改完 `systemctl reload docker`，
+  `reload` 不会停容器）：
+  ```json
+  { "live-restore": true }
+  ```
+  注意这会影响整台机器上的所有容器，请自行评估。
+- **如果是面板 / 定时任务**：把本服务从面板里摘出来，改用 `docker run` 单独跑
+  （见 [不想自己构建？直接用现成镜像](#不想自己构建直接用现成镜像)）。
+- **如果是磁盘满**：确认日志轮转已生效 —— 最新版 compose 已默认开启
+  `LOG_MAX_SIZE=10m` / `LOG_MAX_FILE=3`。用下面的命令核对实际生效的配置：
+  ```bash
+  docker inspect wxchat --format '{{.HostConfig.LogConfig.Type}} {{json .HostConfig.LogConfig.Config}}'
+  # 期望：json-file {"max-file":"3","max-size":"10m"}
+  ```
+  若显示 `{}`，说明还在跑旧 compose，执行 `docker compose up -d` 重建容器。
+  另外 `docker builder prune -f` 与 `docker image prune -f` 也能立刻回收一批空间。
+- **如果是内存**：启动日志里现在会直接打印「容器内存上限」与「Node 堆上限」，
+  两者接近时会给出告警。容器被 OOM 杀掉是 `SIGKILL`，**不会留下任何应用日志**，
+  所以「日志里没报错」不能作为排除依据。处置：调大 compose 的内存限制，
+  或给 node 加 `--max-old-space-size=<MiB>` 压低堆上限。
+- **如果是云服务器被关机**：去云控制台的「操作日志 / 事件中心 / 告警」核对故障时间点。
+  这类停机不是配置能解决的。
+
+> 顺带说明：日志里现在会带上「本次已运行 X 秒」。这一行是刻意加的 ——
+> 「启动 3 秒就停」和「跑了 3 天才停」指向完全不同的原因，一眼就能分开。
 
 ### 端口被占用
 
@@ -956,10 +1066,12 @@ tick 内完成，也不存在手势过期的问题。
 ├── scripts/
 │   ├── selfcheck.js           # 端到端 API 自检
 │   ├── browser-check.js       # 真实浏览器 UI 冒烟测试
+│   ├── check-shutdown.js      # 优雅关闭回归测试（真实 SIGTERM，仅 POSIX）
 │   ├── check-env-file.mjs     # .env 体检：查出哪些值会被 compose 改写（宿主机上跑）
 │   ├── diagnose-login.mjs     # 登录链路二分诊断（容器内跑）
 │   ├── lib/compose-env.js     # Compose env 文件解析器（含官方示例断言）
 │   ├── docker-doctor.sh       # 容器启动故障诊断（在宿主机上跑）
+│   ├── diagnose-unexpected-stop.sh  # 「容器莫名停止」诊断：查清是谁发的停止信号
 │   └── fix-permissions.sh     # 修正 ./data、./uploads 属主（在宿主机上跑）
 ├── data/                      # 运行时生成，不进镜像、不进 git
 └── uploads/                   # 运行时生成，不进镜像、不进 git
@@ -979,17 +1091,26 @@ npm start                     # 等价于容器里的 node src/server.js
 # 另开一个终端
 NO_PROXY='*' ACCESS_PASSWORD=你的密码 npm run selfcheck   # 端到端 API 自检
 NO_PROXY='*' ACCESS_PASSWORD=你的密码 node scripts/browser-check.js   # 真实浏览器 UI 冒烟测试（需本机 Chrome）
+
+# 优雅关闭回归测试：自己起一个子进程，用真实 SIGTERM 验证「关库 → 退出码 0」，
+# 并用 SIGKILL 做反向对照。不需要你手动起服务，也不需要 Docker。
+npm run test:shutdown
 ```
 
 > `NO_PROXY='*'` 是为了绕开宿主机上可能存在的 `http_proxy` —— 访问本地服务不该走代理。
 > 注意 Node 内置的 `fetch`（undici）并不读 `http_proxy`，所以不加通常也没事；
 > 但脚本里若混用了 `curl`，代理会把请求劫持走。
 
+> `npm run test:shutdown` **只能在 Linux / macOS 上跑**：Windows 没有 POSIX 信号，
+> Node 的 `child.kill('SIGTERM')` 在那边是强制终止，根本不会触发信号处理器。
+> 脚本在 Windows 上会显式跳过并说明原因，CI 跑在 `ubuntu-latest`，会自动覆盖这一项。
+
 ### 持续集成
 
 `.github/workflows/docker-publish.yml` 在每次推送到 `main` 或打 `v*` 标签时做两件事：
 
-1. **verify** —— 装依赖、跑环境变量消费审计、启动服务端跑一遍 `selfcheck.js`。
+1. **verify** —— 装依赖、跑环境变量消费审计、启动服务端跑一遍 `selfcheck.js`，
+   再跑一遍 `check-shutdown.js`（真实 `SIGTERM` 的优雅关闭回归测试）。
 2. **build** —— 通过后构建 `linux/amd64` + `linux/arm64` 双架构镜像，推送到
    `ghcr.io/myedunote/docker-wxchat`。
 
