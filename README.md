@@ -461,9 +461,25 @@ docker compose logs | grep -i "cannot find module" && echo "仍然有问题" || 
 | **docker daemon 重启** | 默认配置下 daemon 重启会向**所有**容器发 `SIGTERM`。常见触发：`apt upgrade` 升级 docker、daemon 崩溃后被 systemd 拉起、手动 `systemctl restart docker` |
 | **宿主机重启 / 关机** | 关机流程会给所有进程发 `SIGTERM`。云服务器还会因欠费、到期、流量跑超、Spot 实例回收而直接关机 |
 | **有人或某个面板执行了批量停止** | `docker compose down`、`docker stop $(docker ps -q)`；NAS 面板 / 1Panel / 宝塔 / Portainer 的「重新部署」定时任务 |
+| **前台运行的 `docker compose up`（不带 `-d`）** | 它退出时（Ctrl+C、终端关闭、SSH 会话被回收）会向**它启动的那些容器**发 `SIGTERM`。`docker compose up -d` 不会有这个问题 |
 | **磁盘写满** | `/var/lib/docker` 所在分区满了以后，daemon 无法写状态，整机容器一起出问题 |
 | **整机内存耗尽** | 内核 OOM killer 挑进程杀，可能一次杀好几个。注意这种情况下**日志里不会有任何痕迹** |
 | **自动更新工具** | watchtower、Portainer 的 auto-update 之类会主动停容器再拉起 |
+
+**「本次已运行 X 秒」这条线索怎么用：**
+
+启动横幅之后的关闭日志里会带上运行时长（`收到 SIGTERM，开始优雅关闭…（本次已运行 30 秒）`）。
+这是刻意加的，因为它是**最省事的一条分流线**：
+
+- **只跑了几十秒 / 几分钟就停** → 更可能是**有东西在定期动它**（定时任务、面板的定期重新部署、
+  前台 `compose up` 的会话被回收），而不是内存或负载问题。这类原因**周期性**明显，
+  查 `docker events` 会看到规律性的 `start → die` 循环。
+- **跑了几小时到几天才停** → 更像宿主级**偶发**事件（daemon 重启、宿主机重启、
+  云厂商回收、整机 OOM）。
+
+另外注意 `restart` 策略的边界：**被显式 `docker stop` 过的容器不会自己回来**。
+`unless-stopped` 永远不回来；`always` 也只在 **docker daemon 重启**时才回来。
+所以「停了就一直躺着」本身就说明它是被**主动停止**的，而不是崩溃。
 
 **一条命令定位：**
 
@@ -471,9 +487,10 @@ docker compose logs | grep -i "cannot find module" && echo "仍然有问题" || 
 bash scripts/diagnose-unexpected-stop.sh
 ```
 
-它会依次查：容器的退出码与 `OOMKilled` 标志、`docker events` 里的 `stop`/`kill`/`oom`
-事件（以及**同一时刻还有哪些容器一起死了**）、内核 OOM 记录、daemon 与宿主机的重启历史、
-磁盘与日志占用、同 compose 项目的其它容器、定时任务与面板类工具，最后给出结论列表。
+它会依次查：容器的退出码与 `OOMKilled` 标志、**本次运行时长**、`docker events` 里的
+`stop`/`kill`/`oom` 事件、**把所有容器的停止时间放在一起比对（判断是不是真的「成批停止」）**、
+内核 OOM 记录、daemon 与宿主机的重启历史、磁盘与日志占用、同 compose 项目的其它容器、
+宿主机上是否挂着陈旧的 `compose` 进程、定时任务与面板类工具，最后给出结论列表。
 想扩大时间窗就加 `SINCE`：
 
 ```bash
@@ -483,21 +500,29 @@ SINCE='7d' bash scripts/diagnose-unexpected-stop.sh
 **不想跑脚本，就手敲这几条**（在宿主机上执行）：
 
 ```bash
-# 1) 是正常停止还是被强杀？143 = SIGTERM（外部正常停止），137 = SIGKILL（强杀/OOM）
+# 1) 【最决定性】把所有容器的停止时间放在一起比对。
+#    两个以上落在同一秒 → 就是「成批停止」，单容器原因可以全部排除。
+docker ps -a --format '{{.Names}}' | xargs -I{} docker inspect {} \
+  --format '{{.Name}} 状态={{.State.Status}} 退出码={{.State.ExitCode}} 停于={{.State.FinishedAt}}'
+
+# 2) 是正常停止还是被强杀？143 = SIGTERM（外部正常停止），137 = SIGKILL（强杀/OOM）
 docker inspect wxchat --format '{{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} 重启={{.RestartCount}}'
 
-# 2) 谁在什么时候动了它？以及同一时刻还有谁一起死
+# 3) 谁在什么时候动了它？以及同一时刻还有谁一起死
 docker events --since 24h --until 0s --filter 'event=die' --filter 'event=oom' \
   --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}}'
 
-# 3) daemon 有没有重启过
+# 4) daemon 有没有重启过
 journalctl -u docker --since 24h --no-pager | grep -iE 'Stopping Docker|Started Docker'
 
-# 4) 宿主机有没有重启过（uptime 小于一天就是重启过）
+# 5) 宿主机有没有重启过（uptime 小于一天就是重启过）
 uptime; last -x reboot | head -3
 
-# 5) 磁盘有没有满
+# 6) 磁盘有没有满
 df -h /; du -sh /var/lib/docker/containers/*/*.log | sort -rh | head
+
+# 7) 有没有一个「前台运行的 compose」挂着（它退出时会顺手停掉容器）
+ps -eo pid,etime,args | grep -E '[d]ocker[ -]compose'
 ```
 
 **处置建议：**
@@ -511,6 +536,14 @@ df -h /; du -sh /var/lib/docker/containers/*/*.log | sort -rh | head
   注意这会影响整台机器上的所有容器，请自行评估。
 - **如果是面板 / 定时任务**：把本服务从面板里摘出来，改用 `docker run` 单独跑
   （见 [不想自己构建？直接用现成镜像](#不想自己构建直接用现成镜像)）。
+- **如果宿主机上挂着一个前台 `docker compose up`**：它 Ctrl+C、终端关闭、SSH 会话被回收时，
+  会向它启动的容器发 `SIGTERM`。确认没有残留进程后，改用 `docker compose up -d` 重新部署：
+  ```bash
+  ps -eo pid,etime,args | grep -E '[d]ocker[ -]compose'   # 先确认
+  docker compose up -d                                    # 用后台模式重新起
+  ```
+  顺便提一句：本仓库的 compose 写了 `pull_policy: build`，也就是每次 `up` 都会走本地构建 ——
+  这也是为什么更该用 `-d`，而不是把 `up` 挂在前台会话里。
 - **如果是磁盘满**：确认日志轮转已生效 —— 最新版 compose 已默认开启
   `LOG_MAX_SIZE=10m` / `LOG_MAX_FILE=3`。用下面的命令核对实际生效的配置：
   ```bash

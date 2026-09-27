@@ -111,6 +111,43 @@ elif docker inspect "$CONTAINER" >/dev/null 2>&1; then
     echo "  ⚠ 该容器已重启 $RESTARTS 次 —— 说明是**反复**停止，不是偶发。"
   fi
 
+  # 本次运行了多久？
+  # 「跑了 30 秒就停」和「跑了 3 天才停」指向完全不同的原因，这是最省事的一条分流线：
+  #   短（< 2 分钟）→ 多半有东西在**定期**重新部署/重启，而不是内存或负载问题
+  #   长（数小时~数天）→ 更可能是宿主级偶发事件（daemon 重启 / 关机 / OOM）
+  RUNSEC=""
+  S_AT=$(docker inspect "$CONTAINER" --format '{{.State.StartedAt}}' 2>/dev/null || echo '')
+  F_AT=$(docker inspect "$CONTAINER" --format '{{.State.FinishedAt}}' 2>/dev/null || echo '')
+  if [ -n "$S_AT" ] && [ -n "$F_AT" ]; then
+    S_EPOCH=$(date -d "$S_AT" +%s 2>/dev/null || echo '')
+    F_EPOCH=$(date -d "$F_AT" +%s 2>/dev/null || echo '')
+    if [ -n "$S_EPOCH" ] && [ -n "$F_EPOCH" ] && [ "$F_EPOCH" -ge "$S_EPOCH" ] 2>/dev/null; then
+      RUNSEC=$((F_EPOCH - S_EPOCH))
+      echo "  本次运行时长    = ${RUNSEC} 秒"
+      if [ "$RUNSEC" -lt 120 ]; then
+        echo "  ⚠ 运行不到 2 分钟就被停。这种「刚起来就被停」的短周期，"
+        echo "    典型来源是**定时任务 / 面板的定期重新部署**（cron、systemd timer、"
+        echo "    1Panel / 宝塔 / 群晖 / Portainer 的自动部署），而不是内存或负载。"
+        echo "    请重点看第 2b 节的「成批停止」判定和第 7 节的定时任务检查。"
+        VERDICT+=("容器只运行了 ${RUNSEC} 秒就被 SIGTERM → 优先查「定期重新部署」（crontab / systemd timer / 面板自动部署），而不是 OOM")
+      fi
+    fi
+  fi
+
+  # 容器当前是不是「被显式停掉、且不会自己回来」的状态
+  ST=$(docker inspect "$CONTAINER" --format '{{.State.Status}}' 2>/dev/null || echo '?')
+  if [ "$ST" = "exited" ] && [ "$EXITCODE" = "0" ]; then
+    echo
+    echo "  容器当前是 exited(0)：进程是被**显式停止**的，不是崩溃。"
+    echo "  注意 restart 策略的边界："
+    echo "    · unless-stopped —— 被手动 stop 过就不会自己回来"
+    echo "    · always        —— 手动 stop 后，只在 **docker daemon 重启**时才回来"
+    echo "  两者都**扛不住** docker stop / compose down / 宿主机保持关机。"
+  elif [ "$ST" = "restarting" ]; then
+    echo
+    echo "  容器处于 restarting：正在反复重启。看上面的退出码判断死因。"
+  fi
+
   # 日志轮转是否生效 —— 这是判断「磁盘被日志撑满」的前提
   echo
   if [ "$LOGDRIVER" = "json-file" ] && [ -z "${LOGSIZE_OPT:-}" ]; then
@@ -169,6 +206,68 @@ else
     if [ "$CNT" -le 1 ] && [ "$(echo "$ALLEV" | wc -l | tr -d ' ')" -gt 1 ]; then
       echo "    → 多个容器的停止事件集中在同一秒/同一时刻，这是**宿主机级操作**的典型特征。"
       VERDICT+=("多个容器在同一时刻被停止 → 宿主机级事件（daemon 重启 / 宿主机重启 / 批量 stop）。见第 4、6 节")
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------
+title "2b. 时间线对照：是不是「成批停止」（最决定性的一节）"
+#
+# 「其它容器也一起停」是用户的口头描述，这里把它变成**硬时间戳**：
+# 把所有容器的 FinishedAt 列出来。如果两个以上容器的停止时间落在**同一秒**，
+# 那就不是巧合 —— 一定是某个东西在统一指挥，宿主机级事件或批量命令。
+# 反之，如果各容器的停止时间零零散散，那「一起停」的说法就不成立，要回头查单容器原因。
+if [ "$DOCKER_OK" -eq 0 ]; then
+  echo "  （跳过：docker 不可用）"
+else
+  echo "  各容器的时间线（停于 = FinishedAt，只统计真正停过的）："
+  echo
+  # 表头手工对齐：中文在终端里占两列，用 printf 的 %-Ns 会算错宽度，所以直接写字面量
+  echo "    容器                     状态       退出码   停于                   启动于"
+  docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r n; do
+    [ -z "$n" ] && continue
+    docker inspect "$n" --format \
+      '{{.Name}}|{{.State.Status}}|{{.State.ExitCode}}|{{.State.FinishedAt}}|{{.State.StartedAt}}' \
+      2>/dev/null | awk -F'|' '{
+        gsub(/^\//, "", $1);
+        fin = ($4 ~ /^0001-01-01/) ? "(未停过)" : substr($4, 1, 19);
+        st  = ($5 ~ /^0001-01-01/) ? "(未启动)" : substr($5, 1, 19);
+        printf "    %-24s %-10s %-8s %-22s %s\n", $1, $2, $3, fin, st;
+      }'
+  done
+
+  echo
+  echo "  停止时间**落在同一秒**的容器（计数 >= 2 即为成批停止）："
+  CLUSTER=$(docker ps -a --format '{{.Names}}' 2>/dev/null | while read -r n; do
+      [ -z "$n" ] && continue
+      docker inspect "$n" --format '{{.State.FinishedAt}}' 2>/dev/null
+    done | grep -v '^0001-01-01' | cut -c1-19 | sort | uniq -c | sort -rn | awk '$1 >= 2')
+
+  if [ -n "$CLUSTER" ]; then
+    echo "$CLUSTER" | awk '{ printf "    %s 个容器停于 %s\n", $1, $2 }'
+    echo
+    echo "  ✗ 确实存在「多个容器在同一秒被停止」。这不是单容器问题 ——"
+    echo "    只能是宿主级事件或一条批量命令（见第 4、6、7 节）。"
+    VERDICT+=("多个容器的停止时间落在同一秒 → **确认是成批停止**。查 daemon 重启 / 宿主机重启 / 批量 stop 命令 / 面板自动部署")
+  else
+    echo "    （无。各容器的停止时间彼此分散 —— 「其它容器也一起停」这个前提可能不成立，"
+    echo "      请回头按**单容器**原因排查：内存、崩溃、健康检查、端口冲突）"
+    VERDICT+=("未发现成批停止的时间证据 → 请重新确认「其它容器也一起停」是否属实；若属实，请把各容器的停于时间发出来")
+  fi
+
+  echo
+  echo "  最近 24 小时内，本容器的「启动→停止」循环（周期规律 = 有东西在定期动它）："
+  CYCLES=$(docker events --since 24h --until 0s --filter "container=$CONTAINER" \
+      --filter 'event=start' --filter 'event=die' \
+      --format '{{.Time}} {{.Action}}' 2>/dev/null | tail -20 || true)
+  if [ -z "$CYCLES" ]; then
+    echo "    （无事件；daemon 重启会清空缓冲，换 SINCE='7d' 再试）"
+  else
+    echo "$CYCLES" | sed 's/^/    /'
+    N_START=$(echo "$CYCLES" | grep -c ' start' || true)
+    echo "    → 24 小时内启动 $N_START 次。若远大于 1 且间隔均匀，就是**定时任务**在动它。"
+    if [ "${N_START:-0}" -ge 3 ] 2>/dev/null; then
+      VERDICT+=("24 小时内本容器被启动了 $N_START 次 → 存在周期性重启，重点查定时任务 / 面板自动部署 / watchtower")
     fi
   fi
 fi
@@ -245,7 +344,12 @@ if command -v who >/dev/null 2>&1; then who -b 2>/dev/null | sed 's/^/    最近
 if command -v last >/dev/null 2>&1; then
   last -x reboot shutdown 2>/dev/null | head -8 | sed 's/^/    /'
 fi
-UP_SEC=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo '')
+# /proc/uptime 只有 Linux 才有意义；在 macOS / Git Bash 上会给出误导性的小数值，
+# 所以这里显式限定 Linux，避免在非 Linux 机器上抛出假的「刚重启过」结论。
+UP_SEC=""
+if [ "$(uname -s)" = "Linux" ] && [ -r /proc/uptime ]; then
+  UP_SEC=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo '')
+fi
 if [ -n "$UP_SEC" ] && [ "$UP_SEC" -lt 86400 ] 2>/dev/null; then
   echo "    ⚠ 宿主机开机不到 24 小时 —— 机器本身刚重启过，这很可能就是原因。"
   VERDICT+=("宿主机 uptime 小于 24 小时 → 机器重启过。宿主机重启/关机/云厂商回收实例会一次性停掉所有容器")
@@ -253,7 +357,7 @@ fi
 
 # ---------------------------------------------------------------
 title "5. 磁盘空间（日志撑满分区会连带影响其它容器）"
-df -h / /var/lib/docker 2>/dev/null | awk 'NR==1 || !seen[$0]++' | sed 's/^/  /' || df -h / | sed 's/^/  /'
+df -h / 2>/dev/null | sed 's/^/  /'
 echo
 ROOT_USE=$(df -P / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
 if [ -n "$ROOT_USE" ] && [ "$ROOT_USE" -ge 90 ] 2>/dev/null; then
@@ -264,20 +368,36 @@ else
   echo "  · 根分区使用率 ${ROOT_USE:-?}%"
 fi
 
-echo
-echo "  Docker 数据目录占用 Top 5："
-if [ -d /var/lib/docker ]; then
-  du -sh /var/lib/docker/* 2>/dev/null | sort -rh | head -5 | sed 's/^/    /' || echo "    （需要 root 权限）"
+# Docker 的 data-root 不一定是 /var/lib/docker（很多 NAS / 面板会改到数据盘）
+DOCKER_ROOT="/var/lib/docker"
+if [ "$DOCKER_OK" -eq 1 ]; then
+  DR=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo '')
+  [ -n "$DR" ] && DOCKER_ROOT="$DR"
+fi
+echo "  Docker data-root = $DOCKER_ROOT"
+if [ -d "$DOCKER_ROOT" ]; then
+  DR_FS=$(df -h "$DOCKER_ROOT" 2>/dev/null | awk 'NR==2 {print $5}')
+  echo "  该分区使用率     = ${DR_FS:-?}（这才是真正会被日志撑满的分区）"
+  if [ -n "$DR_FS" ]; then
+    DR_PCT=$(echo "$DR_FS" | tr -d '%')
+    if [ "$DR_PCT" -ge 90 ] 2>/dev/null; then
+      VERDICT+=("Docker data-root 所在分区已用 ${DR_FS} → 磁盘写满会让整机容器一起出问题")
+    fi
+  fi
+  echo
+  echo "  Docker 数据目录占用 Top 5："
+  du -sh "$DOCKER_ROOT"/* 2>/dev/null | sort -rh | head -5 | sed 's/^/    /' \
+    || echo "    （需要 root 权限）"
 else
-  echo "    （没有 /var/lib/docker，可能用了别的 data-root：docker info | grep 'Docker Root Dir'）"
+  echo "  （该目录不存在，可能用了别的 data-root）"
 fi
 
 if [ "$DOCKER_OK" -eq 1 ]; then
   echo
   echo "  各容器日志文件实际大小 Top 5："
-  if [ -d /var/lib/docker/containers ]; then
-    du -sh /var/lib/docker/containers/*/*.log 2>/dev/null | sort -rh | head -5 | sed 's/^/    /' \
-      || echo "    （需要 root 权限：sudo du -sh /var/lib/docker/containers/*/*.log | sort -rh | head）"
+  if [ -d "$DOCKER_ROOT/containers" ]; then
+    du -sh "$DOCKER_ROOT"/containers/*/*.log 2>/dev/null | sort -rh | head -5 | sed 's/^/    /' \
+      || echo "    （需要 root 权限：sudo du -sh $DOCKER_ROOT/containers/*/*.log | sort -rh | head）"
   fi
   echo
   echo "  docker 自身占用："
@@ -330,6 +450,27 @@ for pat in watchtower portainer 1panel bt-panel dockge yacht; do
   fi
 done
 docker ps -a --format '  {{.Names}}  {{.Image}}' 2>/dev/null | head -20 || true
+
+echo
+echo "  —— 宿主机上正在运行的 compose / 部署脚本 ——"
+# `docker compose up`（**不带 -d**）是前台运行：它 Ctrl+C、终端断开、或所在 SSH
+# 会话被回收时，会向**它启动的那些容器**发 SIGTERM。
+# 如果宿主机上挂着一个陈旧的 compose 进程（常见于 tmux/screen 里忘了退），
+# 就能解释「启动后不久就停」。
+PSOUT=$(ps -eo pid,ppid,etime,args 2>/dev/null | grep -E '[d]ocker[ -]compose|[d]ocker-compose' || true)
+if [ -n "$PSOUT" ]; then
+  echo "$PSOUT" | sed 's/^/    /'
+  echo
+  echo "    ⚠ 有 compose 进程正在运行。核对它的启动时间（etime）是否早于容器："
+  echo "      若是，它退出时会顺手停掉容器 —— 改用 'docker compose up -d' 重新部署可避免。"
+  VERDICT+=("宿主机上存在正在运行的 compose 进程：若是**前台**（不带 -d）运行，它退出/终端断开时会向容器发 SIGTERM")
+else
+  echo "    （没有）"
+fi
+if command -v tmux >/dev/null 2>&1; then
+  T=$(tmux ls 2>/dev/null || true)
+  [ -n "$T" ] && { echo "    存在 tmux 会话（可能挂着陈旧的部署命令）："; echo "$T" | sed 's/^/      /'; }
+fi
 
 echo
 echo "  —— 定时任务 ——"
