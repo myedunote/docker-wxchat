@@ -443,13 +443,28 @@ fi
 # ---------------------------------------------------------------
 title "7. 有没有「第三方」在替你停容器"
 echo "  —— 自动更新 / 面板类工具 ——"
+PANEL_FOUND=0
+ALLC=$(docker ps -a --format '{{.Names}} ({{.Image}})' 2>/dev/null || true)
 for pat in watchtower portainer 1panel bt-panel dockge yacht; do
-  if [ "$DOCKER_OK" -eq 1 ] && docker ps -a --format '{{.Names}} {{.Image}}' 2>/dev/null | grep -qi "$pat"; then
-    echo "  ⚠ 发现疑似工具：$(docker ps -a --format '{{.Names}} ({{.Image}})' | grep -i "$pat" | tr '\n' ' ')"
+  HIT=$(echo "$ALLC" | grep -i "$pat" | tr '\n' ' ' || true)
+  if [ -n "$HIT" ]; then
+    echo "  ⚠ 发现疑似工具：$HIT"
     VERDICT+=("检测到 '$pat'：这类工具会自动更新/重启容器，可能就是你看到的「批量停止」来源")
+    PANEL_FOUND=1
   fi
 done
-docker ps -a --format '  {{.Names}}  {{.Image}}' 2>/dev/null | head -20 || true
+echo "$ALLC" | sed 's/^/  /'
+
+if [ "$PANEL_FOUND" -eq 1 ]; then
+  echo
+  echo "  宿主机上有面板类工具 —— **优先去它的「操作日志 / 审计日志 / 事件日志」**里"
+  echo "  对照上面的停止时间，这是最快能定位「谁下的手」的地方。"
+  echo "  特别注意这几类行为，它们都会先停容器："
+  echo "    · 备份 / 快照 / 迁移应用（停 → 打包 → 启动；**中途失败就一直停着**）"
+  echo "    · 面板自身升级 / 系统更新"
+  echo "    · 应用市场或容器页的「全部重启 / 全部停止 / 一键清理」"
+  echo "    · 「重启 Docker 服务」—— 若它实际执行的是 docker stop，容器不会自己回来"
+fi
 
 echo
 echo "  —— 宿主机上正在运行的 compose / 部署脚本 ——"
