@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "selfcheck": "node scripts/selfcheck.js",
+    "test:shutdown": "node scripts/check-shutdown.js",
     "audit:env": "node scripts/audit-env-usage.mjs",
     "check:env": "node scripts/check-env-file.mjs",
     "diagnose:login": "node scripts/diagnose-login.mjs",

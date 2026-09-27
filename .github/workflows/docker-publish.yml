@@ -73,6 +73,11 @@ jobs:
       - name: 运行自检
         run: NO_PROXY='*' ACCESS_PASSWORD=test-password-123 node scripts/selfcheck.js
 
+      # 用真实 SIGTERM 验证优雅关闭链路（POSIX 信号在 ubuntu runner 上可用）。
+      # 这条链路决定了「docker stop 时数据是否安全落盘」，此前没有任何断言。
+      - name: 优雅关闭回归测试
+        run: npm run test:shutdown
+
       - name: 失败时打印服务端日志
         if: failure()
         run: cat /tmp/server.log || true

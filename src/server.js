@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import v8 from 'node:v8';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 
@@ -38,6 +39,20 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 
 const VERSION = '2.0.1';
 
+/** 进程启动时刻，用于在收到停止信号时报告「本次运行了多久」 */
+const STARTED_AT = Date.now();
+
+/** 把毫秒时长说成人话：3 秒 / 5 分 12 秒 / 2 小时 3 分 / 4 天 1 小时 */
+function formatUptime(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时 ${m % 60} 分`;
+  return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
+}
+
 function log(...args) {
   console.log('[wxchat]', ...args);
 }
@@ -45,6 +60,47 @@ function log(...args) {
 function fatal(message, err) {
   console.error('[wxchat] ✗', message, err ? `\n${err.stack || err}` : '');
   process.exit(1);
+}
+
+function mib(bytes) {
+  return `${Math.round(bytes / 1024 / 1024)} MiB`;
+}
+
+/**
+ * 读取本进程所在 cgroup 的内存上限与当前用量。
+ *
+ * 为什么值得在启动时打印：容器「启动后不久就没了」最常见的原因就是内存，
+ * 但 OOM 有两种表现，日志里留下的线索完全不同：
+ *   · 容器自身 cgroup 超限 → 内核直接 SIGKILL，**一条日志都不会有**，容器凭空消失（退出码 137）
+ *   · 整机内存耗尽        → 内核 OOM killer 挑进程杀，可能**连别的容器一起杀掉**
+ * 用户看到「容器突然停止」时，第一件该确认的事就是「我到底有没有内存上限、离它还有多远」。
+ * 打印出来，不用进容器、不用装工具就能判断。
+ */
+function readCgroupMemory() {
+  const candidates = [
+    // cgroup v2（Docker 20.10+ 的主流；无上限时该文件内容是字符串 "max"）
+    ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current', 'cgroup v2'],
+    // cgroup v1（老内核 / 老发行版；无上限时是一个约 9.2e18 的哨兵值）
+    ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes', 'cgroup v1'],
+  ];
+  for (const [limitPath, usagePath, kind] of candidates) {
+    let raw;
+    try {
+      raw = fs.readFileSync(limitPath, 'utf8').trim();
+    } catch {
+      continue; // 该 cgroup 版本不存在，试下一个
+    }
+    if (!raw || raw === 'max') continue;
+    const bytes = Number(raw);
+    if (!Number.isFinite(bytes) || bytes > 1e15) continue; // 哨兵值 = 无限制
+    let used = null;
+    try {
+      const u = Number(fs.readFileSync(usagePath, 'utf8').trim());
+      if (Number.isFinite(u)) used = u;
+    } catch { /* 用量读不到不影响上限判定 */ }
+    return { kind, bytes, used };
+  }
+  return null;
 }
 
 /** 启动自检：把「容器里到底在哪个目录、入口文件在哪」直接打到日志里 */
@@ -58,6 +114,26 @@ function printEnvironmentBanner({ dbPath, uploadPath, publicDir }) {
   log(`上传目录      : ${uploadPath}`);
   log(`静态资源目录  : ${publicDir}`);
   log(`时区 TZ       : ${process.env.TZ || '(未设置，使用系统默认)'}`);
+  log(`进程 pid:ppid : ${process.pid}:${process.ppid}`);
+
+  const cg = readCgroupMemory();
+  const heapLimit = v8.getHeapStatistics().heap_size_limit;
+  if (cg) {
+    const pct = cg.used != null
+      ? `（当前已用 ${mib(cg.used)}，约 ${((cg.used / cg.bytes) * 100).toFixed(0)}%）`
+      : '';
+    log(`容器内存上限  : ${mib(cg.bytes)} [${cg.kind}]${pct}`);
+  } else {
+    log('容器内存上限  : 未设置（无 cgroup 限制，或不是容器环境）');
+  }
+  log(`Node 堆上限   : ${mib(heapLimit)}（V8 默认约可用内存的一半，硬上限 4 GiB）`);
+
+  // 堆上限逼近容器上限时，一次大文件上传或几条长连接就可能把容器送进 OOM，
+  // 而 OOM 是 SIGKILL —— 日志里什么都看不到，最容易被误判成「程序自己停了」。
+  if (cg && heapLimit > cg.bytes * 0.8) {
+    log('  ⚠ Node 堆上限已接近容器内存上限，存在被 OOM 杀掉的风险（且不会有任何日志）。');
+    log('    可在 compose 里调大内存限制，或给 node 加 --max-old-space-size=<MiB> 压低堆上限。');
+  }
   log('=======================================================');
 }
 
@@ -345,7 +421,15 @@ async function main() {
   const shutdown = async (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log(`收到 ${signal}，开始优雅关闭…`);
+    const uptime = formatUptime(Date.now() - STARTED_AT);
+    log(`收到 ${signal}，开始优雅关闭…（本次已运行 ${uptime}）`);
+
+    // 这条提示是刻意加的：SIGTERM 是**外部**发来的停止信号，不是程序崩了。
+    // 日志里出现它 + 后面完整的关闭流程，恰恰说明应用是健康的。
+    // 真正要查的是「谁发的」，而不是「代码哪里有 bug」。
+    log('  提示: SIGTERM/SIGINT 来自外部（docker stop / compose down / daemon 重启 /');
+    log('        宿主机关机），不是程序自身崩溃。若「刚启动就收到」且同一台机器上');
+    log('        其它容器也同时停止，请运行 bash scripts/diagnose-unexpected-stop.sh。');
 
     const forceExit = setTimeout(() => {
       console.warn('[wxchat] 关闭超时，强制退出');
@@ -379,6 +463,14 @@ async function main() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  // SIGHUP：终端断开 / systemd 停止单元；SIGQUIT：部分编排器用它做「软停止」。
+  // 两者都走同一套优雅关闭，避免 SQLite 的 WAL 没落盘就退出。
+  // （Windows 上这两个信号不会被投递，注册本身无害。）
+  for (const sig of ['SIGHUP', 'SIGQUIT']) {
+    try {
+      process.on(sig, () => shutdown(sig));
+    } catch { /* 该平台不支持，忽略 */ }
+  }
   process.on('unhandledRejection', (reason) => {
     console.error('[wxchat] 未处理的 Promise 拒绝:', reason);
   });
